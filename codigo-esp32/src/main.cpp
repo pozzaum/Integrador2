@@ -105,8 +105,8 @@ void loop() {
 
     Serial.print("Pulses: ");
     Serial.print(pulses);
-    Serial.print(" | RPM: ");
-    Serial.println(rpm);
+    Serial.print(" | Km / h: ");
+    Serial.println(rpm * 60 * 2 * 3.1416*3e-5);
   }
 
   delay(5);
