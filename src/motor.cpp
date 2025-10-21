@@ -1,18 +1,21 @@
 #include "motor.h"
 
-static void setMotorRaw(uint8_t motor, int16_t pwm)
+void setMotorRaw(uint8_t motor, int16_t pwm)
 {
-  uint8_t in1, in2, en;
-  uint8_t ch;
+  uint8_t in1, in2, en, ch;
 
-  // Seleção de pinos conforme o motor
+  // Seleção de pinos/canais
   if (motor == 1) {
     in1 = M1_IN1; in2 = M1_IN2; en = M1_EN; ch = CH_M1;
   } else { // motor == 2
     in1 = M2_IN1; in2 = M2_IN2; en = M2_EN; ch = CH_M2;
   }
 
-  // Caso PWM zero → para o motor
+  // Satura interface em -255..+255
+  if (pwm >  255) pwm =  255;
+  if (pwm < -255) pwm = -255;
+
+  // Parado (coast): IN1=LOW, IN2=LOW, duty=0
   if (pwm == 0) {
     digitalWrite(in1, LOW);
     digitalWrite(in2, LOW);
@@ -21,25 +24,23 @@ static void setMotorRaw(uint8_t motor, int16_t pwm)
   }
 
   // Direção: positivo = frente, negativo = ré
-  bool forward = (pwm > 0);
+  const bool forward = (pwm > 0);
 
-  // Calcula magnitude (sem usar abs/min pra evitar ambiguidade)
-  uint16_t duty = (pwm < 0) ? (uint16_t)(-pwm) : (uint16_t)pwm;
+  // Magnitude 0..255
+  uint16_t mag8 = (pwm > 0) ? (uint16_t)pwm : (uint16_t)(-pwm);
 
-  // Garante limite de 0–255
-  if (duty > 255u) duty = 255u;
+  // Converte 0..255 -> 0..(2^PWM_RES - 1)
+  const uint16_t maxDuty = (1u << PWM_RES) - 1u;
+  uint16_t duty = (uint32_t)mag8 * maxDuty / 255u;
 
-  // Ajusta direção e aplica PWM
-  digitalWrite(in1, forward ? LOW : HIGH);
-  digitalWrite(in2, forward ? HIGH  : LOW);
+  // Seta direção (mantém sua convenção atual)
+  digitalWrite(in1, forward ? LOW  : HIGH);
+  digitalWrite(in2, forward ? HIGH : LOW);
+
+  // Aplica PWM
   ledcWrite(ch, duty);
 }
 
-
-// atalho específico: frente/parado
-inline void setMotor(uint8_t motor, uint8_t pwm_0_255) { setMotorRaw(motor, (int16_t)pwm_0_255); }
-inline void stopMotors() { setMotor(1, 0); setMotor(2, 0); }
-inline void runForward(uint8_t pwm) { setMotor(1, pwm); setMotor(2, pwm); }
 
 void setMotor(int motor, int speed) {
   int in1, in2, ch;
@@ -59,11 +60,11 @@ void setMotor(int motor, int speed) {
   }
 
   if (speed > 0) {
-    // Frente: IN1=HIGH, IN2=LOW
+    // Frente: IN1=LOW, IN2=HIGH
     digitalWrite(in1, LOW);
     digitalWrite(in2, HIGH);
   } else {
-    // Ré: IN1=LOW, IN2=HIGH
+    // Ré: IN1=HIGH, IN2=LOW
     digitalWrite(in1, HIGH);
     digitalWrite(in2, LOW);
   }

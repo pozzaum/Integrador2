@@ -17,8 +17,9 @@
 
 // Headers das funcionalidades
 #include "motor.h"
+#include "drive.h"
 #include "gps.h"
-#include "distance_tracking.h"
+#include "encoder.h"
 
 
 #endif // MAIN_H
