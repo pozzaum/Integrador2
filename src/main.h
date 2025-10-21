@@ -3,6 +3,9 @@
 
 #include <Arduino.h>
 #include <HCSR04.h>
+#include <algorithm>
+#include <cstdlib>
+
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/semphr.h"
