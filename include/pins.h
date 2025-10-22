@@ -24,4 +24,8 @@
 #define TRIG_PIN 21
 #define ECHO_PIN 22
 
+// Colisão
+#define COLLISION_BUZZER 12
+#define COLLISION_LED    19
+
 #endif // DEFINES_H

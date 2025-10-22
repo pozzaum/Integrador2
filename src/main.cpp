@@ -24,6 +24,10 @@ void setup() {
   pinMode(M2_IN1, OUTPUT);
   pinMode(M2_IN2, OUTPUT);
 
+  // COLISÃO
+  pinMode(COLLISION_BUZZER, OUTPUT);
+  pinMode(COLLISION_LED, OUTPUT);
+
   // PWM
   ledcSetup(CH_M1, PWM_FREQ, PWM_RES);
   ledcAttachPin(M1_EN, CH_M1);
@@ -53,6 +57,8 @@ void setup() {
 void loop() {
   unsigned long now = millis();
 
+  static const float ALIGN_STEP_MAX   = 45.0f;   // gira no máx 45° por vez
+
   // ======= Estado de navegação (último comando válido do GPS) =======
   static GpsNavCommand lastCmd;
   static bool          lastCmdValid = false;
@@ -74,7 +80,7 @@ void loop() {
         gpsBlocked = true;
       }
       Serial.println("[GPS] Sem FIX. Movimento BLOQUEADO.");
-      lastCmdValid = false; // sem fix, invalida comando
+      lastCmdValid = false;
     } else {
       // Temos fix: calcula navegação
       gpsBlocked = false;
@@ -83,8 +89,7 @@ void loop() {
       if (gps_current_location(&lat, &lon)) {
         double dist, brg;
         if (gps_distance_bearing_to_target(&dist, &brg)) {
-
-          // TODO: substitua por heading da IMU quando tiver (COG do GPS só presta com velocidade > ~0.7 m/s)
+          // TODO: substituir por heading da IMU quando houver
           const double heading_atual_deg = 0.0;
 
           GpsNavCommand cmd;
@@ -123,7 +128,6 @@ void loop() {
     float window_s = intervalMs / 1000.0f;
     float rpm = (pulses / (float)PULSES_PER_REV) * (60.0f / window_s);
 
-    // Ajuste este fator conforme o diâmetro efetivo da roda
     float kmh = rpm * 60.0f * 2.0f * 3.1416f * 3e-5f;
 
     Serial.print("Pulses: "); Serial.print(pulses);
@@ -145,18 +149,22 @@ void loop() {
       if (!stopped && dist_cm <= THRESH_STOP_CM) {
         stopMotors();
         stopped = true;
+        
+        digitalWrite(COLLISION_BUZZER, HIGH);
+        digitalWrite(COLLISION_LED, HIGH);
         Serial.println("[INFO] Obstáculo próximo: PARAR");
       } else if (stopped && dist_cm >= THRESH_RESUME_CM) {
-        // Libera o gate de obstáculo; quem decide andar é a política final
         stopped = false;
         Serial.println("[INFO] Livre novamente (gate obstáculo liberado).");
+        digitalWrite(COLLISION_BUZZER, LOW);
+        digitalWrite(COLLISION_LED, LOW);
       }
     } else {
       Serial.println("Dist: leitura inválida");
     }
   }
 
-  // ======= Política final de movimento com direção por eψ =======
+  // ======= Política final de movimento com turnByAngle =======
   bool shouldMove = (!stopped) && (!gpsBlocked) && (!goalArrived) && lastCmdValid;
 
   static bool wasMoving = false;
@@ -170,40 +178,54 @@ void loop() {
       else if (goalArrived)  Serial.println("[STATE] PARAR: Chegou ao alvo.");
       else                   Serial.println("[STATE] PARAR: Gate.");
     }
+    return; // nada a fazer
+  }
+
+  // Temos um comando válido: aplicar navegação
+  float epsi = (float)lastCmd.heading_error_deg;   // graus
+  float dist = (float)lastCmd.distance_m;          // metros
+
+  // Deadband
+  if (fabs(epsi) < YAW_DEADBAND_DEG) epsi = 0.f;
+
+  // Perfil de velocidade base pela distância (usado no modo curva)
+  uint8_t base = PWM_BASE;
+  if (dist < SLOW_DIST2)      base = max<uint8_t>(PWM_MIN, PWM_BASE - 80);
+  else if (dist < SLOW_DIST1) base = max<uint8_t>(PWM_MIN, PWM_BASE - 40);
+
+  if (fabs(epsi) >= YAW_ALIGN_DEG) {
+    // === Alinhamento usando turnByAngle em passos limitados ===
+    const bool sentidoHorario = (epsi > 0);       // eψ>0 → alvo à direita
+    const float stepDeg = min(fabs(epsi), ALIGN_STEP_MAX);
+    // Timeout proporcional ao ângulo (regra de bolso)
+    const unsigned long tmo = (unsigned long)(2000 + 25.0f * stepDeg);
+
+    Serial.printf("[NAV] Align: eψ=%.1f°, step=%.1f°, sentido=%s\n",
+                  epsi, stepDeg, sentidoHorario ? "horario" : "anti-horario");
+
+    // Segurança extra: se o sonar travou recentemente, não gira
+    if (!stopped) {
+      bool ok = turnByAngle(stepDeg, sentidoHorario, PWM_TURN, tmo);
+      if (!ok) Serial.println("[NAV] turnByAngle timeout — tentou alinhar e excedeu tempo.");
+    }
+
+  } else if (fabs(epsi) > YAW_CURVE_DEG) {
+    // === Curva/seguimento com diferencial (pequenos erros) ===
+    float steer = KP_STEER * epsi;
+    driveArc(base, steer);
+    Serial.printf("[NAV] Curva: steer=%.2f | eψ=%.1f° | base=%u | dist=%.1f m\n",
+                  steer, epsi, base, dist);
+
   } else {
-    // Temos um comando válido: aplicar navegação
-    float epsi = (float)lastCmd.heading_error_deg;   // graus
-    float dist = (float)lastCmd.distance_m;          // metros
+    // === Quase alinhado: siga em frente com leve correção ===
+    float steer = KP_STEER * epsi;
+    driveArc(base, steer);
+  }
 
-    // Deadband
-    if (fabs(epsi) < YAW_DEADBAND_DEG) epsi = 0.f;
-
-    // Perfil de velocidade base pela distância
-    uint8_t base = PWM_BASE;
-    if (dist < SLOW_DIST2)      base = max<uint8_t>(PWM_MIN, PWM_BASE - 80);
-    else if (dist < SLOW_DIST1) base = max<uint8_t>(PWM_MIN, PWM_BASE - 40);
-
-    if (fabs(epsi) >= YAW_ALIGN_DEG) {
-      // Giro no lugar até alinhar
-      int sgn = (epsi > 0) ? +1 : -1; // eψ>0: alvo está à direita → girar para a direita
-      turnInPlace(sgn, PWM_TURN);
-      //turnInPlace(1, 240);
-      Serial.println("[NAV] Giro no lugar para alinhar.");
-    } else {
-      // Curva/seguimento com diferencial
-      float steer = KP_STEER * epsi;
-      // driveArc já satura steer em [-1, +1] (conforme sua implementação)
-      driveArc(base, steer);
-
-      // Log opcional (comente se ficar verboso)
-      Serial.printf("[NAV] Steer=%.2f | eψ=%.1f° | base=%u | dist=%.1f m\n",
-                    steer, epsi, base, dist);
-    }
-
-    if (!wasMoving) {
-      Serial.println("[STATE] Movimento LIBERADO (GPS OK, sem obstáculo, não-chegou).");
-      wasMoving = true;
-    }
+  if (!wasMoving) {
+    Serial.println("[STATE] Movimento LIBERADO (GPS OK, sem obstáculo, não-chegou).");
+    wasMoving = true;
   }
 }
+
 

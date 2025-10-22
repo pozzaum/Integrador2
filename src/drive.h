@@ -6,7 +6,7 @@
 #include "encoder.h"
 
 
-#define DEG_PER_PULSE_YAW 18.0f
+#define DEG_PER_PULSE_YAW 3.6f
 
 // ===== Navegação por heading error (eψ) =====
 static const float YAW_ALIGN_DEG   = 45.0f;   // acima disso: gira no lugar
@@ -17,7 +17,7 @@ static const float YAW_DEADBAND_DEG= 3.0f;    // não oscilar por ruído
 static const float KP_STEER = 0.02f;          // 0.02 → 100° vira steer ~2.0→satura em ±1
 
 // Velocidades
-static const uint8_t PWM_TURN   = 240;        // giro no lugar
+static const uint8_t PWM_TURN   = 255;        // giro no lugar
 static const uint8_t PWM_BASE   = 240;        // base pra seguir em frente
 static const uint8_t PWM_MIN    = 150;        // base mínima quando perto
 static const float   SLOW_DIST1 = 25.0f;      // <25 m: desacelera
